@@ -28,6 +28,16 @@ output [
       name: "detection_classes"
       data_type: TYPE_INT32
       dims: [1000 ]
+    },
+    {
+      name: "num_filtered_detections"
+      data_type: TYPE_INT32
+      dims: [1 ]
+    },
+    {
+      name: "filtered_detection_boxes"
+      data_type: TYPE_FP32
+      dims: [1000,4 ]
     }
 ]
 ensemble_scheduling {
@@ -66,6 +76,14 @@ ensemble_scheduling {
       output_map {
         key: "detection_classes"
         value: "detection_classes"
+      },
+      output_map {
+        key: "num_filtered_detections"
+        value: "num_filtered_detections"
+      },
+      output_map {
+        key: "filtered_detection_boxes"
+        value: "filtered_detection_boxes"
       }
     }
   ]

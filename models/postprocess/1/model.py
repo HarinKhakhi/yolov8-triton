@@ -2,6 +2,10 @@ import numpy as np
 import json
 import triton_python_backend_utils as pb_utils
 import cv2
+import cProfile
+import pstats
+import io
+import time
 
 
 class TritonPythonModel:
@@ -31,6 +35,7 @@ class TritonPythonModel:
         # Get OUTPUT0 configuration
         num_detections_config = pb_utils.get_output_config_by_name(
             model_config, "num_detections")
+
         detection_boxes_config = pb_utils.get_output_config_by_name(
             model_config, "detection_boxes")
 
@@ -40,24 +45,192 @@ class TritonPythonModel:
         detection_classes_config = pb_utils.get_output_config_by_name(
             model_config, "detection_classes")
 
+        num_filtered_detections_config = pb_utils.get_output_config_by_name(
+            model_config, "num_filtered_detections")
+
+        filtered_detection_boxes_config = pb_utils.get_output_config_by_name(
+            model_config, "filtered_detection_boxes")
+
         # Convert Triton types to numpy types
         self.num_detections_dtype = pb_utils.triton_string_to_numpy(
             num_detections_config['data_type'])
 
-        # Convert Triton types to numpy types
         self.detection_boxes_dtype = pb_utils.triton_string_to_numpy(
             detection_boxes_config['data_type'])
 
-        # Convert Triton types to numpy types
         self.detection_scores_dtype = pb_utils.triton_string_to_numpy(
             detection_scores_config['data_type'])
 
-        # Convert Triton types to numpy types
         self.detection_classes_dtype = pb_utils.triton_string_to_numpy(
             detection_classes_config['data_type'])
 
+        self.num_filtered_detections_dtype = pb_utils.triton_string_to_numpy(
+            num_filtered_detections_config['data_type'])
+
+        self.filtered_detection_boxes_dtype = pb_utils.triton_string_to_numpy(
+            filtered_detection_boxes_config['data_type'])
+
         self.score_threshold = 0.25
         self.nms_threshold = 0.45
+        self.profile = True
+
+    def calculate_score(self, box1, box2):
+        """
+        Calculate the score two bounding boxes.
+        currently, score = intersection
+
+        Parameters:
+        box1, box2 : tuple or list
+            Bounding boxes in the format (x, y, w, h).
+            x, y: top-left corner coordinates.
+            w: width of the bounding box.
+            h: height of the bounding box.
+
+        Returns:
+        score : float
+           0 being the lowest score and 1 being the highest.`
+        """
+
+        # Extract the coordinates and dimensions
+        x1, y1, w1, h1 = box1
+        x2, y2, w2, h2 = box2
+
+        # Calculate the coordinates of the intersection rectangle
+        x_intersection = max(x1, x2)
+        y_intersection = max(y1, y2)
+        w_intersection = min(x1 + w1, x2 + w2) - x_intersection
+        h_intersection = min(y1 + h1, y2 + h2) - y_intersection
+
+        # Ensure the width and height of the intersection are positive
+        if w_intersection > 0 and h_intersection > 0:
+            intersection_area = w_intersection * h_intersection
+        else:
+            intersection_area = 0
+
+        return intersection_area
+
+
+    def handle_request(self, request):
+        # Get INPUT0
+        in_0 = pb_utils.get_input_tensor_by_name(request, "INPUT_0")
+
+        # Get the output arrays from the results
+        outputs = in_0.as_numpy()
+
+        outputs = np.array([cv2.transpose(outputs[0])])
+        rows = outputs.shape[1]
+
+        # filtering out the boxes with lower confidence
+        boxes = []
+        scores = []
+        class_ids = []
+        for i in range(rows):
+            classes_scores = outputs[0][i][4:]
+            (minScore, maxScore, minClassLoc, (x, maxClassIndex)
+                ) = cv2.minMaxLoc(classes_scores)
+            if maxScore >= self.score_threshold:
+                box = [outputs[0][i][0] -
+                        (0.5 *
+                        outputs[0][i][2]), outputs[0][i][1] -
+                        (0.5 *
+                        outputs[0][i][3]), outputs[0][i][2], outputs[0][i][3]]
+                boxes.append(box)
+                scores.append(maxScore)
+                class_ids.append(maxClassIndex)
+                
+        # NMS to reduce the number of boxes
+        nms_boxes = cv2.dnn.NMSBoxes(boxes, scores,
+                                        self.score_threshold,
+                                        self.nms_threshold,
+                                        0.5)
+        
+        filtered_boxes = []
+        # ============================= MANUAL FILTERING =============================
+        # parameters
+        class1_id = 37 # gun
+        class2_id = 0 # person
+        threshold_score = 0.0
+
+        # filter out required boxes
+        class1_boxes = [box_ind for box_ind in nms_boxes if class_ids[box_ind] == class1_id]
+        class2_boxes = [box_ind for box_ind in nms_boxes if class_ids[box_ind] == class2_id]
+
+        # brute-force loop to check for max score pair
+        filtered_boxes = set()
+        for box1_ind in class1_boxes:
+            box1 = boxes[box1_ind]
+            max_score = 0.0
+            max_score_box2 = -1
+
+            for box2_ind in class2_boxes:
+                box2 = boxes[box2_ind]
+                
+                score = self.calculate_score(box1, box2)
+                if score >= max_score:
+                    max_score = score
+                    max_score_box2 = box2_ind 
+
+            # only add box1 and box2 pair if the score is higher than threshold
+            if max_score >= threshold_score:
+                filtered_boxes.add(box1_ind)
+                filtered_boxes.add(max_score_box2)
+        
+        filtered_boxes = list(filtered_boxes)
+        # ============================================================================
+        
+        # preparing output
+        num_detections = 0
+        output_boxes = []
+        output_scores = []
+        output_classids = []
+        num_filtered_detections = 0
+        output_filtered_boxes = []
+
+        for i in range(len(nms_boxes)):
+            index = nms_boxes[i]
+
+            output_boxes.append(boxes[index])
+            output_scores.append(scores[index])
+            output_classids.append(class_ids[index])
+
+            num_detections += 1
+        
+        for i in range(len(filtered_boxes)):
+            index = filtered_boxes[i]
+
+            output_filtered_boxes.append(boxes[index])
+            num_filtered_detections += 1
+
+        # formatting the output with correct types
+        num_detections = pb_utils.Tensor(
+            "num_detections", np.array(num_detections).astype(self.num_detections_dtype))
+
+        detection_boxes = pb_utils.Tensor(
+            "detection_boxes", np.array(output_boxes).astype(self.detection_boxes_dtype))
+
+        detection_scores = pb_utils.Tensor(
+            "detection_scores", np.array(output_scores).astype(self.detection_scores_dtype))
+        
+        detection_classes = pb_utils.Tensor(
+            "detection_classes", np.array(output_classids).astype(self.detection_classes_dtype))
+        
+        num_filtered_detections = pb_utils.Tensor(
+            "num_filtered_detections", np.array(num_filtered_detections).astype(self.num_detections_dtype))
+
+        filtered_boxes = pb_utils.Tensor(
+            "filtered_detection_boxes", np.array(output_filtered_boxes).astype(self.filtered_detection_boxes_dtype))
+
+        # setting the output
+        inference_response = pb_utils.InferenceResponse(
+            output_tensors=[
+                num_detections,
+                detection_boxes,
+                detection_scores,
+                detection_classes,
+                num_filtered_detections,
+                filtered_boxes])
+
+        return inference_response
 
     def execute(self, requests):
         """`execute` MUST be implemented in every Python model. `execute`
@@ -79,87 +252,39 @@ class TritonPythonModel:
           be the same as `requests`
         """
 
-        num_detections_dtype = self.num_detections_dtype
-        detection_boxes_dtype = self.detection_boxes_dtype
-        detection_scores_dtype = self.detection_scores_dtype
-        detection_classes_dtype = self.detection_classes_dtype
+        logger = pb_utils.Logger
 
         responses = []
 
         # Every Python backend must iterate over everyone of the requests
         # and create a pb_utils.InferenceResponse for each of them.
         for request in requests:
-            # Get INPUT0
-            in_0 = pb_utils.get_input_tensor_by_name(request, "INPUT_0")
+            # Start profiling
+            profiler = cProfile.Profile()
+            profiler.enable()
 
-            # Get the output arrays from the results
-            outputs = in_0.as_numpy()
+            start_time = time.perf_counter()
 
-            outputs = np.array([cv2.transpose(outputs[0])])
-            rows = outputs.shape[1]
+            # Call your function and capture the return value
+            result = self.handle_request(request)
 
-            boxes = []
-            scores = []
-            class_ids = []
-            for i in range(rows):
-                classes_scores = outputs[0][i][4:]
-                (minScore, maxScore, minClassLoc, (x, maxClassIndex)
-                 ) = cv2.minMaxLoc(classes_scores)
-                if maxScore >= self.score_threshold:
-                    box = [outputs[0][i][0] -
-                           (0.5 *
-                            outputs[0][i][2]), outputs[0][i][1] -
-                           (0.5 *
-                            outputs[0][i][3]), outputs[0][i][2], outputs[0][i][3]]
-                    boxes.append(box)
-                    scores.append(maxScore)
-                    class_ids.append(maxClassIndex)
+            end_time = time.perf_counter()
 
-            result_boxes = cv2.dnn.NMSBoxes(boxes, scores,
-                                            self.score_threshold,
-                                            self.nms_threshold,
-                                            0.5)
+            # Stop profiling
+            profiler.disable()
 
-            num_detections = 0
-            output_boxes = []
-            output_scores = []
-            output_classids = []
-            for i in range(len(result_boxes)):
-                index = result_boxes[i]
-                box = boxes[index]
-                detection = {
-                    'class_id': class_ids[index],
-                    'confidence': scores[index],
-                    'box': box}
-                output_boxes.append(box)
-                output_scores.append(scores[index])
-                output_classids.append(class_ids[index])
+            # Create a StringIO buffer to capture the profiling output
+            s = io.StringIO()
+            ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative')
+            ps.print_stats()
 
-                num_detections += 1
+            # Get the profiling output as a string
+            profile_output = s.getvalue()
+            if self.profile:
+                logger.log_info(profile_output)
+                logger.log_info(f'Total Time: {end_time - start_time}')
 
-            num_detections = np.array(num_detections)
-            num_detections = pb_utils.Tensor(
-                "num_detections", num_detections.astype(num_detections_dtype))
-
-            detection_boxes = np.array(output_boxes)
-            detection_boxes = pb_utils.Tensor(
-                "detection_boxes", detection_boxes.astype(detection_boxes_dtype))
-
-            detection_scores = np.array(output_scores)
-            detection_scores = pb_utils.Tensor(
-                "detection_scores", detection_scores.astype(detection_scores_dtype))
-            detection_classes = np.array(output_classids)
-            detection_classes = pb_utils.Tensor(
-                "detection_classes",
-                detection_classes.astype(detection_classes_dtype))
-
-            inference_response = pb_utils.InferenceResponse(
-                output_tensors=[
-                    num_detections,
-                    detection_boxes,
-                    detection_scores,
-                    detection_classes])
-            responses.append(inference_response)
+            responses.append(result)
 
         return responses
 
