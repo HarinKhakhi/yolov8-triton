@@ -1,13 +1,17 @@
 import numpy as np
-import tritonclient.grpc as grpcclient
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+from os import makedirs, listdir, path, remove
 import time
-from os import makedirs, listdir, path
 import argparse
 import cv2
 
 from csv import DictWriter
 from tqdm import tqdm
+
+import tritonclient.grpc as grpcclient
 
 import utils
 
@@ -18,7 +22,10 @@ FILTERING_V1_MODEL_NAME = 'yolov8_ensemble_filtering_1'
 MODELS = [DEFAULT_MODEL_NAME, FILTERING_V1_MODEL_NAME]
 
 LOG_FILE = 'output/logs/gun_video_cpu.csv'
-LOG_FIELDS = ['timestamp', 'model_name', 'total_time']
+LOG_FIELDS = ['timestamp', 'input_path', 'model_name', 'total_time', 'num_boxes']
+LOG_MODE = 'rewrite'
+PLOT_FILE = 'output/plots/gun_video_cpu.png'
+
 # ================================================================================
 
 def run_triton_model(model_name: str, input_image: np.ndarray, triton_client: grpcclient.InferenceServerClient):
@@ -45,9 +52,6 @@ def run_triton_model(model_name: str, input_image: np.ndarray, triton_client: gr
 
 
 def infer(image_path):
-    # setup
-    makedirs('./output/images', exist_ok=True)
-    makedirs('./output/logs', exist_ok=True)
     triton_client = utils.get_triton_client(TRITON_URL)
     log_file = open(LOG_FILE, 'a+')
     log_writer = DictWriter(log_file, fieldnames=LOG_FIELDS)
@@ -59,11 +63,17 @@ def infer(image_path):
         # load image
         original_image, input_image, scale = utils.read_image(image_path, expected_image_shape)
         
-        # run inference and profile
+        # run inference and profile and write logs
         start_time = time.perf_counter()
         detection_boxes, detection_scores, detection_classes = run_triton_model(model_name, input_image, triton_client)
         end_time = time.perf_counter()
-        log_writer.writerow({'timestamp': round(time.time()*1000), 'model_name': model_name, 'total_time': end_time-start_time})
+        log_writer.writerow({
+            'timestamp': round(time.time()*1000),
+            'input_path': image_path,
+            'model_name': model_name,
+            'total_time': end_time-start_time,
+            'num_boxes': len(detection_boxes)
+        })
 
         # draw bounding boxes
         for index in range(len(detection_boxes)):
@@ -87,9 +97,18 @@ if __name__ == '__main__':
     parser.add_argument('--max_images', type=int, default=1000)
     args = parser.parse_args()
 
+    # setup
+    makedirs('./output/images', exist_ok=True)
+    makedirs('./output/logs', exist_ok=True)
+    makedirs('./output/plots', exist_ok=True)
+    remove(LOG_FILE)
+
+    # handle image
     if args.image_path:
         infer(args.image_path)
+    # handle video 
     else:
+        # convert video to bunch of images
         video_path = args.video_path
         video_images_path = video_path.split('.mp4')[0]
 
@@ -97,7 +116,21 @@ if __name__ == '__main__':
             makedirs(video_images_path)
             utils.video_to_image(video_path, video_images_path)
 
+        # handle each image separately
+        total_inference = 0
         for filename in tqdm(listdir(video_images_path)[:args.max_images]):
             infer(path.join(video_images_path, filename))
+            total_inference += 1
     
-    utils.plot_graph(LOG_FILE, LOG_FIELDS, x='model_name', y='total_time')
+    # plotting logs
+    data = pd.read_csv(LOG_FILE, header=None, names=LOG_FIELDS)
+
+    # violin plot for comparing total_time by model
+    violin_plot = sns.violinplot(data=data, x='model_name', y='total_time')
+    violin_plot.get_figure().savefig(PLOT_FILE)
+    plt.show()
+
+    # # scatter plot
+    # total_time_diff = data.groupby('model_name')
+    # scatter_plot = sns.scatterplot(data=data, x='timestamp', y='total_time', hue='model_name')
+    # plt.show()
