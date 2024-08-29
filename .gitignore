@@ -1,6 +1,7 @@
-# Ignore images
+# Ignore images / video
 *.jpg
 *.png
+*.mp4
 
 # Ignore Model Files
 *.pt
