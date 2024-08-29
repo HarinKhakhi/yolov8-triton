@@ -2,9 +2,6 @@ import numpy as np
 import json
 import triton_python_backend_utils as pb_utils # type: ignore
 import cv2
-import cProfile
-import pstats
-import io
 import time
 
 
@@ -208,10 +205,6 @@ class TritonPythonModel:
         # Every Python backend must iterate over everyone of the requests
         # and create a pb_utils.InferenceResponse for each of them.
         for request in requests:
-            # Start profiling
-            profiler = cProfile.Profile()
-            profiler.enable()
-
             start_time = time.perf_counter()
 
             # Call your function and capture the return value
@@ -219,19 +212,7 @@ class TritonPythonModel:
 
             end_time = time.perf_counter()
 
-            # Stop profiling
-            profiler.disable()
-
-            # Create a StringIO buffer to capture the profiling output
-            s = io.StringIO()
-            ps = pstats.Stats(profiler, stream=s).sort_stats('cumulative')
-            ps.print_stats()
-
-            # Get the profiling output as a string
-            profile_output = s.getvalue()
-            if self.profile:
-                logger.log_info(profile_output)
-                logger.log_info(f'Total Time: {end_time - start_time}')
+            logger.log_info(f'Total Time: {end_time - start_time}')
 
             responses.append(result)
 
