@@ -23,7 +23,7 @@ MODELS = [DEFAULT_MODEL_NAME, FILTERING_V1_MODEL_NAME]
 
 LOG_FILE = 'output/logs/gun_video_cpu.csv'
 LOG_FIELDS = ['timestamp', 'input_path', 'model_name', 'total_time', 'num_boxes']
-LOG_MODE = 'rewrite'
+LOG_MODE = 'append'
 PLOT_FILE = 'output/plots/gun_video_cpu.png'
 
 # ================================================================================
@@ -101,7 +101,7 @@ if __name__ == '__main__':
     makedirs('./output/images', exist_ok=True)
     makedirs('./output/logs', exist_ok=True)
     makedirs('./output/plots', exist_ok=True)
-    remove(LOG_FILE)
+    if path.isfile(LOG_FILE) and LOG_MODE == 'rewrite': remove(LOG_FILE)
 
     # handle image
     if args.image_path:
@@ -117,20 +117,9 @@ if __name__ == '__main__':
             utils.video_to_image(video_path, video_images_path)
 
         # handle each image separately
-        total_inference = 0
-        for filename in tqdm(listdir(video_images_path)[:args.max_images]):
+        images = listdir(video_images_path)[:args.max_images]
+        for filename in tqdm(images):
             infer(path.join(video_images_path, filename))
-            total_inference += 1
     
-    # plotting logs
-    data = pd.read_csv(LOG_FILE, header=None, names=LOG_FIELDS)
-
-    # violin plot for comparing total_time by model
-    violin_plot = sns.violinplot(data=data, x='model_name', y='total_time')
-    violin_plot.get_figure().savefig(PLOT_FILE)
-    plt.show()
-
-    # # scatter plot
-    # total_time_diff = data.groupby('model_name')
-    # scatter_plot = sns.scatterplot(data=data, x='timestamp', y='total_time', hue='model_name')
-    # plt.show()
+    # process logs
+    utils.process_logs(LOG_FILE, LOG_FIELDS)
