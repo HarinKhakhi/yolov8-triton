@@ -26,66 +26,58 @@ class TritonPythonModel:
           * model_name: Model name
         """
 
-        # You must parse model_config. JSON string is not parsed here
+        # parsing model config
         self.model_config = model_config = json.loads(args['model_config'])
 
-        # Get OUTPUT0 configuration
-        detection_boxes_config = pb_utils.get_output_config_by_name(
-            model_config, "detection_boxes")
+        # loading output field data types
+        OUTPUT_FIELD_NAMES = ["detection_boxes", "detection_scores", "detection_classes"]
+        self.output_dtypes = {}
+        
+        for OUTPUT_FILED_NAME in OUTPUT_FIELD_NAMES:
+            field_config = pb_utils.get_output_config_by_name(model_config, OUTPUT_FILED_NAME)
+            self.output_dtypes[OUTPUT_FILED_NAME] = pb_utils.triton_string_to_numpy(field_config['data_type'])
 
-        detection_scores_config = pb_utils.get_output_config_by_name(
-            model_config, "detection_scores")
-
-        detection_classes_config = pb_utils.get_output_config_by_name(
-            model_config, "detection_classes")
-
-        # Convert Triton types to numpy types
-        self.detection_boxes_dtype = pb_utils.triton_string_to_numpy(
-            detection_boxes_config['data_type'])
-
-        self.detection_scores_dtype = pb_utils.triton_string_to_numpy(
-            detection_scores_config['data_type'])
-
-        self.detection_classes_dtype = pb_utils.triton_string_to_numpy(
-            detection_classes_config['data_type'])
-
+        # parameters
         self.score_threshold = 0.25
         self.nms_threshold = 0.45
         self.profile = True
 
     def handle_request(self, request):
-        # Get INPUT0
+        # get INPUT
         in_0 = pb_utils.get_input_tensor_by_name(request, "INPUT_0")
 
-        # Get the output arrays from the results
+        # get OUTPUT
         outputs = in_0.as_numpy()
-
         outputs = np.array([cv2.transpose(outputs[0])])
         rows = outputs.shape[1]
 
         # filtering out the boxes with lower confidence
+        # and setup box format as per cv2.dnn.NMSBoxes requirement
         boxes = []
         scores = []
         class_ids = []
         for i in range(rows):
             classes_scores = outputs[0][i][4:]
-            (minScore, maxScore, minClassLoc, (x, maxClassIndex)
-                ) = cv2.minMaxLoc(classes_scores)
+            (_, maxScore, _, (_, maxClassIndex)) = cv2.minMaxLoc(classes_scores)
+
             if maxScore >= self.score_threshold:
-                box = [outputs[0][i][0] -
-                        (0.5 *
-                        outputs[0][i][2]), outputs[0][i][1] -
-                        (0.5 *
-                        outputs[0][i][3]), outputs[0][i][2], outputs[0][i][3]]
+                box = [
+                    outputs[0][i][0] - (0.5 * outputs[0][i][2]), 
+                    outputs[0][i][1] - (0.5 * outputs[0][i][3]), 
+                    outputs[0][i][2], 
+                    outputs[0][i][3]
+                ]
+
                 boxes.append(box)
                 scores.append(maxScore)
                 class_ids.append(maxClassIndex)
                 
         # NMS to reduce the number of boxes
-        result_boxes = cv2.dnn.NMSBoxes(boxes, scores,
-                                        self.score_threshold,
-                                        self.nms_threshold,
-                                        0.5)
+        result_boxes = cv2.dnn.NMSBoxes(
+            boxes, scores,
+            self.score_threshold, self.nms_threshold,
+            0.5
+        )
         
         # preparing output
         output_boxes = []
@@ -101,13 +93,13 @@ class TritonPythonModel:
 
         # formatting the output with correct types
         detection_boxes = pb_utils.Tensor(
-            "detection_boxes", np.array(output_boxes).astype(self.detection_boxes_dtype))
+            "detection_boxes", np.array(output_boxes, dtype=self.output_dtypes["detection_boxes"]))
 
         detection_scores = pb_utils.Tensor(
-            "detection_scores", np.array(output_scores).astype(self.detection_scores_dtype))
+            "detection_scores", np.array(output_scores, dtype=self.output_dtypes["detection_scores"]))
         
         detection_classes = pb_utils.Tensor(
-            "detection_classes", np.array(output_classids).astype(self.detection_classes_dtype))
+            "detection_classes", np.array(output_classids, dtype=self.output_dtypes["detection_classes"]))
         
         # setting the output
         inference_response = pb_utils.InferenceResponse(
