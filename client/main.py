@@ -3,11 +3,16 @@ import cv2
 import tritonclient.grpc as grpcclient
 import sys
 import argparse
+import time
+from csv import DictWriter
 
 TRITON_URL = 'localhost:8001'
 DEFAULT_MODEL_NAME = 'yolov8_ensemble'
 FILTERING_V1_MODEL_NAME = 'yolov8_ensemble_filtering_1'
 MODELS = [DEFAULT_MODEL_NAME, FILTERING_V1_MODEL_NAME]
+
+LOG_FILE = './data.csv'
+LOG_FIELDS = ['timestamp', 'model_name', 'total_time']
 
 def get_triton_client(url: str = 'localhost:8001'):
     try:
@@ -81,15 +86,24 @@ def run_inference(model_name: str, input_image: np.ndarray, triton_client: grpcc
 
 
 def main(image_path):
+    # setup
     triton_client = get_triton_client(TRITON_URL)
+    log_file = open(LOG_FILE, 'a+')
+    log_writer = DictWriter(log_file, fieldnames=LOG_FIELDS)
 
     for model_name in MODELS:
         # load model config
         expected_image_shape = triton_client.get_model_metadata(model_name).inputs[0].shape[-2:]
+        
         # load image
         original_image, input_image, scale = read_image(image_path, expected_image_shape)
-        # run inference
+        
+        # run inference and profile
+        start_time = time.perf_counter()
         detection_boxes, detection_scores, detection_classes = run_inference(model_name, input_image, triton_client)
+        end_time = time.perf_counter()
+        log_writer.writerow({'timestamp': round(time.time()*1000), 'model_name': model_name, 'total_time': end_time-start_time})
+
         # draw bounding boxes
         for index in range(len(detection_boxes)):
             box = detection_boxes[index]
@@ -102,6 +116,8 @@ def main(image_path):
         # write image
         cv2.imwrite(f'outputs/{model_name}_output.jpg', original_image)
 
+    # de-setup
+    log_file.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -12,3 +12,6 @@
 
 # Ignore Cache Files
 *.pyc
+
+# Ignore Data files
+*.csv
