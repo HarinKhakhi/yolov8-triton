@@ -27,4 +27,10 @@ output [
     }
 ]
 
-instance_group [{ kind: KIND_CPU }]
+instance_group [
+  {
+    kind: KIND_CPU
+  }
+]
+
+version_policy: { all: {}}

@@ -4,6 +4,9 @@ import tritonclient.grpc as grpcclient
 import sys
 import argparse
 
+TRITON_URL = 'localhost:8001'
+DEFAULT_MODEL_NAME = 'yolov8_ensemble'
+FILTERING_V1_MODEL_NAME = 'yolov8_ensemble_filtering_1'
 
 def get_triton_client(url: str = 'localhost:8001'):
     try:
@@ -74,33 +77,32 @@ def run_inference(model_name: str, input_image: np.ndarray,
     return detection_boxes, detection_scores, detection_classes
 
 
-def main(image_path, model_name, url):
-    triton_client = get_triton_client(url)
+def main(image_path):
+    triton_client = get_triton_client(TRITON_URL)
 
-    expected_image_shape = triton_client.get_model_metadata(model_name).inputs[0].shape[-2:]
-    original_image, input_image, scale = read_image(image_path, expected_image_shape)
+    for model_name in [DEFAULT_MODEL_NAME, FILTERING_V1_MODEL_NAME]:
+        expected_image_shape = triton_client.get_model_metadata(model_name).inputs[0].shape[-2:]
+        original_image, input_image, scale = read_image(image_path, expected_image_shape)
 
-    detection_boxes, detection_scores, detection_classes = run_inference(model_name, input_image, triton_client)
+        detection_boxes, detection_scores, detection_classes = run_inference(model_name, input_image, triton_client)
 
-    for index in range(len(detection_boxes)):
-        box = detection_boxes[index]
+        for index in range(len(detection_boxes)):
+            box = detection_boxes[index]
 
-        draw_bounding_box(original_image,
-                          detection_classes[index],
-                          detection_scores[index],
-                          round(box[0] * scale),
-                          round(box[1] * scale),
-                          round((box[0] + box[2]) * scale),
-                          round((box[1] + box[3]) * scale))
+            draw_bounding_box(original_image,
+                            detection_classes[index],
+                            detection_scores[index],
+                            round(box[0] * scale),
+                            round(box[1] * scale),
+                            round((box[0] + box[2]) * scale),
+                            round((box[1] + box[3]) * scale))
 
 
-    cv2.imwrite('output.jpg', original_image)
+        cv2.imwrite(f'outputs/{model_name}_output.jpg', original_image)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--image_path', type=str, default='./assets/bus.jpg')
-    parser.add_argument('--model_name', type=str, default='yolov8_ensemble')
-    parser.add_argument('--url', type=str, default='localhost:8001')
     args = parser.parse_args()
-    main(args.image_path, args.model_name, args.url)
+    main(args.image_path)

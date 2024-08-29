@@ -53,6 +53,42 @@ class TritonPythonModel:
         self.nms_threshold = 0.45
         self.profile = True
 
+    def calculate_score(self, box1, box2):
+        """
+        Calculate the score two bounding boxes.
+        currently, score = intersection
+
+        Parameters:
+        box1, box2 : tuple or list
+            Bounding boxes in the format (x, y, w, h).
+            x, y: top-left corner coordinates.
+            w: width of the bounding box.
+            h: height of the bounding box.
+
+        Returns:
+        score : float
+           0 being the lowest score and 1 being the highest.`
+        """
+
+        # Extract the coordinates and dimensions
+        x1, y1, w1, h1 = box1
+        x2, y2, w2, h2 = box2
+
+        # Calculate the coordinates of the intersection rectangle
+        x_intersection = max(x1, x2)
+        y_intersection = max(y1, y2)
+        w_intersection = min(x1 + w1, x2 + w2) - x_intersection
+        h_intersection = min(y1 + h1, y2 + h2) - y_intersection
+
+        # Ensure the width and height of the intersection are positive
+        if w_intersection > 0 and h_intersection > 0:
+            intersection_area = w_intersection * h_intersection
+        else:
+            intersection_area = 0
+
+        return intersection_area
+
+
     def handle_request(self, request):
         # Get INPUT0
         in_0 = pb_utils.get_input_tensor_by_name(request, "INPUT_0")
@@ -82,18 +118,53 @@ class TritonPythonModel:
                 class_ids.append(maxClassIndex)
                 
         # NMS to reduce the number of boxes
-        result_boxes = cv2.dnn.NMSBoxes(boxes, scores,
+        nms_boxes = cv2.dnn.NMSBoxes(boxes, scores,
                                         self.score_threshold,
                                         self.nms_threshold,
                                         0.5)
+        
+        filtered_boxes = []
+        # ============================= MANUAL FILTERING =============================
+        # parameters
+        class1_id = 37 # gun
+        class2_id = 0 # person
+        threshold_score = 0.0
+
+        # filter out required boxes
+        class1_boxes = [box_ind for box_ind in nms_boxes if class_ids[box_ind] == class1_id]
+        class2_boxes = [box_ind for box_ind in nms_boxes if class_ids[box_ind] == class2_id]
+
+        # brute-force loop to check for max score pair
+        filtered_boxes = set()
+        for box1_ind in class1_boxes:
+            box1 = boxes[box1_ind]
+            max_score = 0.0
+            max_score_box2 = -1
+
+            for box2_ind in class2_boxes:
+                box2 = boxes[box2_ind]
+                
+                score = self.calculate_score(box1, box2)
+                if score >= max_score:
+                    max_score = score
+                    max_score_box2 = box2_ind 
+
+            # only add box1 and box2 pair if the score is higher than threshold
+            if max_score >= threshold_score:
+                filtered_boxes.add(box1_ind)
+                filtered_boxes.add(max_score_box2)
+        
+        filtered_boxes = list(filtered_boxes)
+        # ============================================================================
         
         # preparing output
         output_boxes = []
         output_scores = []
         output_classids = []
+        output_filtered_boxes = []
 
-        for i in range(len(result_boxes)):
-            index = result_boxes[i]
+        for i in range(len(filtered_boxes)):
+            index = filtered_boxes[i]
 
             output_boxes.append(boxes[index])
             output_scores.append(scores[index])

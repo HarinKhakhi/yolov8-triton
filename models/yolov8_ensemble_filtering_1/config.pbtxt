@@ -1,4 +1,4 @@
-name: "yolov8_ensemble"
+name: "yolov8_ensemble_filtering_1"
 platform: "ensemble"
 max_batch_size: 0
 input [
@@ -41,7 +41,7 @@ ensemble_scheduling {
     },
     {
       model_name: "postprocess"
-      model_version: 1
+      model_version: 2
       input_map {
         key: "INPUT_0"
         value: "output0"
