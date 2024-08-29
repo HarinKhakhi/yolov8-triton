@@ -60,38 +60,29 @@ def run_inference(model_name: str, input_image: np.ndarray,
     inputs.append(grpcclient.InferInput('images', input_image.shape, "FP32"))
     inputs[0].set_data_from_numpy(input_image)
 
-    outputs.append(grpcclient.InferRequestedOutput('num_detections'))
     outputs.append(grpcclient.InferRequestedOutput('detection_boxes'))
     outputs.append(grpcclient.InferRequestedOutput('detection_scores'))
     outputs.append(grpcclient.InferRequestedOutput('detection_classes'))
-    outputs.append(grpcclient.InferRequestedOutput('num_filtered_detections'))
-    outputs.append(grpcclient.InferRequestedOutput('filtered_detection_boxes'))
 
     # Test with outputs
     results = triton_client.infer(model_name=model_name, inputs=inputs, outputs=outputs)
 
-    num_detections = results.as_numpy('num_detections')
     detection_boxes = results.as_numpy('detection_boxes')
     detection_scores = results.as_numpy('detection_scores')
     detection_classes = results.as_numpy('detection_classes')
-    num_filtered_detections = results.as_numpy('num_filtered_detections')
-    filtered_detection_boxes = results.as_numpy('filtered_detection_boxes')
 
-    return num_detections, detection_boxes, detection_scores, detection_classes, num_filtered_detections, filtered_detection_boxes
+    return detection_boxes, detection_scores, detection_classes
 
 
 def main(image_path, model_name, url):
     triton_client = get_triton_client(url)
 
     expected_image_shape = triton_client.get_model_metadata(model_name).inputs[0].shape[-2:]
-
     original_image, input_image, scale = read_image(image_path, expected_image_shape)
-    filtered_boxes_image, _, _ = read_image(image_path, expected_image_shape)
 
-    num_detections, detection_boxes, detection_scores, detection_classes, num_filtered_detections, filtered_boxes = run_inference(
-        model_name, input_image, triton_client)
+    detection_boxes, detection_scores, detection_classes = run_inference(model_name, input_image, triton_client)
 
-    for index in range(num_detections):
+    for index in range(len(detection_boxes)):
         box = detection_boxes[index]
 
         draw_bounding_box(original_image,
@@ -102,21 +93,8 @@ def main(image_path, model_name, url):
                           round((box[0] + box[2]) * scale),
                           round((box[1] + box[3]) * scale))
 
-    for index in range(num_filtered_detections):
-        box = filtered_boxes[index]
-
-        draw_bounding_box(filtered_boxes_image,
-                          0,
-                          0,
-                          round(box[0] * scale),
-                          round(box[1] * scale),
-                          round((box[0] + box[2]) * scale),
-                          round((box[1] + box[3]) * scale),
-                          (0,255,))
-
 
     cv2.imwrite('output.jpg', original_image)
-    cv2.imwrite('output_filtered.jpg', filtered_boxes_image)
 
 
 if __name__ == '__main__':

@@ -9,9 +9,6 @@ import time
 
 
 class TritonPythonModel:
-    """Your Python model must use the same class name. Every Python model
-    that is created must have "TritonPythonModel" as the class name.
-    """
 
     def initialize(self, args):
         """`initialize` is called only once when the model is being loaded.
@@ -33,9 +30,6 @@ class TritonPythonModel:
         self.model_config = model_config = json.loads(args['model_config'])
 
         # Get OUTPUT0 configuration
-        num_detections_config = pb_utils.get_output_config_by_name(
-            model_config, "num_detections")
-
         detection_boxes_config = pb_utils.get_output_config_by_name(
             model_config, "detection_boxes")
 
@@ -45,16 +39,7 @@ class TritonPythonModel:
         detection_classes_config = pb_utils.get_output_config_by_name(
             model_config, "detection_classes")
 
-        num_filtered_detections_config = pb_utils.get_output_config_by_name(
-            model_config, "num_filtered_detections")
-
-        filtered_detection_boxes_config = pb_utils.get_output_config_by_name(
-            model_config, "filtered_detection_boxes")
-
         # Convert Triton types to numpy types
-        self.num_detections_dtype = pb_utils.triton_string_to_numpy(
-            num_detections_config['data_type'])
-
         self.detection_boxes_dtype = pb_utils.triton_string_to_numpy(
             detection_boxes_config['data_type'])
 
@@ -63,12 +48,6 @@ class TritonPythonModel:
 
         self.detection_classes_dtype = pb_utils.triton_string_to_numpy(
             detection_classes_config['data_type'])
-
-        self.num_filtered_detections_dtype = pb_utils.triton_string_to_numpy(
-            num_filtered_detections_config['data_type'])
-
-        self.filtered_detection_boxes_dtype = pb_utils.triton_string_to_numpy(
-            filtered_detection_boxes_config['data_type'])
 
         self.score_threshold = 0.25
         self.nms_threshold = 0.45
@@ -179,11 +158,9 @@ class TritonPythonModel:
         # ============================================================================
         
         # preparing output
-        num_detections = 0
         output_boxes = []
         output_scores = []
         output_classids = []
-        num_filtered_detections = 0
         output_filtered_boxes = []
 
         for i in range(len(nms_boxes)):
@@ -193,18 +170,12 @@ class TritonPythonModel:
             output_scores.append(scores[index])
             output_classids.append(class_ids[index])
 
-            num_detections += 1
-        
         for i in range(len(filtered_boxes)):
             index = filtered_boxes[i]
 
             output_filtered_boxes.append(boxes[index])
-            num_filtered_detections += 1
 
         # formatting the output with correct types
-        num_detections = pb_utils.Tensor(
-            "num_detections", np.array(num_detections).astype(self.num_detections_dtype))
-
         detection_boxes = pb_utils.Tensor(
             "detection_boxes", np.array(output_boxes).astype(self.detection_boxes_dtype))
 
@@ -214,21 +185,13 @@ class TritonPythonModel:
         detection_classes = pb_utils.Tensor(
             "detection_classes", np.array(output_classids).astype(self.detection_classes_dtype))
         
-        num_filtered_detections = pb_utils.Tensor(
-            "num_filtered_detections", np.array(num_filtered_detections).astype(self.num_detections_dtype))
-
-        filtered_boxes = pb_utils.Tensor(
-            "filtered_detection_boxes", np.array(output_filtered_boxes).astype(self.filtered_detection_boxes_dtype))
-
         # setting the output
         inference_response = pb_utils.InferenceResponse(
             output_tensors=[
-                num_detections,
                 detection_boxes,
                 detection_scores,
                 detection_classes,
-                num_filtered_detections,
-                filtered_boxes])
+            ])
 
         return inference_response
 
